@@ -1,5 +1,8 @@
-import argparse
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import sys
+import argparse
 from argparse import RawTextHelpFormatter
 
 from dashboard.lib.arguments.arguments import init_dashboard_parser
@@ -26,7 +29,7 @@ class ProwlerArgumentParser:
         self.parser = argparse.ArgumentParser(
             prog="prowler",
             formatter_class=RawTextHelpFormatter,
-            usage="prowler [-h] [--version] {aws,azure,gcp,kubernetes,m365,github,nhn,dashboard} ...",
+            usage="prowler [-h] [--version] {aws,azure,gcp,kubernetes,m365,nhn,dashboard} ...",
             epilog="""
 Available Cloud Providers:
   {aws,azure,gcp,kubernetes,m365,nhn}
@@ -34,8 +37,8 @@ Available Cloud Providers:
     azure               Azure Provider
     gcp                 GCP Provider
     kubernetes          Kubernetes Provider
-    m365                Microsoft 365 Provider
     github              GitHub Provider
+    m365                Microsoft 365 Provider
     nhn                 NHN Provider (Unofficial)
 
 Available components:
@@ -47,21 +50,25 @@ To see the different available options on a specific component, run:
 Detailed documentation at https://docs.prowler.com
 """,
         )
-        # Default
+        # Version flag
         self.parser.add_argument(
             "--version",
             "-v",
             action="store_true",
             help="show Prowler version",
         )
-        # Common arguments parser
+
+        # Common arguments parser (for reuse across subparsers)
         self.common_providers_parser = argparse.ArgumentParser(add_help=False)
 
-        # Providers Parser
+        # Top‐level subparsers for providers/components
         self.subparsers = self.parser.add_subparsers(
-            title="Available Cloud Providers", dest="provider", help=argparse.SUPPRESS
+            title="Available Cloud Providers",
+            dest="provider",
+            help=argparse.SUPPRESS,
         )
 
+        # Now wire up all of the argument groups
         self.__init_outputs_parser__()
         self.__init_logging_parser__()
         self.__init_checks_parser__()
@@ -72,58 +79,53 @@ Detailed documentation at https://docs.prowler.com
         self.__init_custom_checks_metadata_parser__()
         self.__init_third_party_integrations_parser__()
 
-        # Init Providers Arguments
+        # Finally init provider‐specific args and dashboard
         init_providers_parser(self)
-
-        # Dashboard Parser
         init_dashboard_parser(self)
 
     def parse(self, args=None) -> argparse.Namespace:
         """
         parse is a wrapper to call parse_args() and do some validation
         """
-        # We can override sys.argv
+        # Allow overriding argv for testing
         if args:
             sys.argv = args
 
+        # Handle -v/--version as a special case
         if len(sys.argv) == 2 and sys.argv[1] in ("-v", "--version"):
             print(check_current_version())
             sys.exit(0)
 
-        # Set AWS as the default provider if no provider is supplied
+        # If no args passed, default to AWS
         if len(sys.argv) == 1:
             sys.argv = self.__set_default_provider__(sys.argv)
 
-        # Help and Version flags cannot set a default provider
+        # If the first non‐script arg looks like a flag, assume AWS
         if (
             len(sys.argv) >= 2
             and (sys.argv[1] not in ("-h", "--help"))
             and (sys.argv[1] not in ("-v", "--version"))
         ):
-            # Since the provider is always the second argument, we are checking if
-            # a flag, starting by "-", is supplied
-            if "-" in sys.argv[1]:
+            if sys.argv[1].startswith("-"):
                 sys.argv = self.__set_default_provider__(sys.argv)
-
-            # Provider aliases mapping
-            # Microsoft 365
             elif sys.argv[1] == "microsoft365":
+                # alias
                 sys.argv[1] = "m365"
 
-        # Parse arguments
+        # Now do the real parse
         args = self.parser.parse_args()
 
-        # A provider is always required
+        # Must have a provider
         if not args.provider:
             self.parser.error(
                 "A provider/component is required to see its specific help options."
             )
 
-        # Only Logging Configuration
+        # If only-logs or list-checks-json, suppress banner
         if args.provider != "dashboard" and (args.only_logs or args.list_checks_json):
             args.no_banner = True
 
-        # Extra validation for provider arguments
+        # Validate provider arguments
         valid, message = validate_provider_arguments(args)
         if not valid:
             self.parser.error(f"{args.provider}: {message}")
@@ -131,22 +133,17 @@ Detailed documentation at https://docs.prowler.com
         return args
 
     def __set_default_provider__(self, args: list) -> list:
-        default_args = [args[0]]
-        provider = "aws"
-        default_args.append(provider)
-        default_args.extend(args[1:])
-        # Save the arguments with the default provider included
+        default_args = [args[0], "aws"] + args[1:]
         return default_args
 
     def __init_outputs_parser__(self):
-        # Outputs
         common_outputs_parser = self.common_providers_parser.add_argument_group(
             "Outputs"
         )
         common_outputs_parser.add_argument(
             "--status",
             nargs="+",
-            help=f"Filter by the status of the findings {[status.value for status in Status]}",
+            help=f"Filter by status { [status.value for status in Status] }",
             choices=[status.value for status in Status],
         )
         common_outputs_parser.add_argument(
@@ -154,53 +151,48 @@ Detailed documentation at https://docs.prowler.com
             "--output-modes",
             "-M",
             nargs="+",
-            help="Output modes, by default csv and json-oscf are saved. When using AWS Security Hub integration, json-asff output is also saved.",
             default=["csv", "json-ocsf", "html"],
             choices=available_output_formats,
+            help="Output modes, by default csv/json-ocsf/html",
         )
         common_outputs_parser.add_argument(
             "--output-filename",
             "-F",
             nargs="?",
-            help="Custom output report name without the file extension, if not specified will use default output/prowler-output-ACCOUNT_NUM-OUTPUT_DATE.format",
+            help="Custom output report name (no extension)",
         )
         common_outputs_parser.add_argument(
             "--output-directory",
             "-o",
             nargs="?",
-            help="Custom output directory, by default the folder where Prowler is stored",
             default=default_output_directory,
+            help="Custom output directory (default: prowler folder)",
         )
         common_outputs_parser.add_argument(
             "--verbose",
             action="store_true",
-            help="Runs showing all checks executed and results",
+            help="Show all checks executed and results",
         )
         common_outputs_parser.add_argument(
             "--ignore-exit-code-3",
             "-z",
             action="store_true",
-            help="Failed checks do not trigger exit code 3",
+            help="Do not exit with code 3 on failures",
         )
         common_outputs_parser.add_argument(
             "--no-banner", "-b", action="store_true", help="Hide Prowler banner"
         )
         common_outputs_parser.add_argument(
-            "--no-color",
-            action="store_true",
-            help="Disable color codes in output",
+            "--no-color", action="store_true", help="Disable color output"
         )
-
         common_outputs_parser.add_argument(
             "--unix-timestamp",
             action="store_true",
             default=False,
-            help="Set the output timestamp format as unix timestamps instead of iso format timestamps (default mode).",
+            help="Use unix timestamps instead of ISO format",
         )
 
     def __init_logging_parser__(self):
-        # Logging Options
-        # Both options can be combined to only report to file some log level
         common_logging_parser = self.common_providers_parser.add_argument_group(
             "Logging"
         )
@@ -208,21 +200,16 @@ Detailed documentation at https://docs.prowler.com
             "--log-level",
             choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
             default="CRITICAL",
-            help="Select Log Level",
+            help="Select log level",
         )
         common_logging_parser.add_argument(
-            "--log-file",
-            nargs="?",
-            help="Set log file name",
+            "--log-file", nargs="?", help="Set log file name"
         )
         common_logging_parser.add_argument(
-            "--only-logs",
-            action="store_true",
-            help="Print only Prowler logs by the stdout. This option sets --no-banner.",
+            "--only-logs", action="store_true", help="Print only Prowler logs"
         )
 
     def __init_exclude_checks_parser__(self):
-        # Exclude checks options
         exclude_checks_parser = self.common_providers_parser.add_argument_group(
             "Exclude checks/services to run"
         )
@@ -241,62 +228,58 @@ Detailed documentation at https://docs.prowler.com
         )
 
     def __init_checks_parser__(self):
-        # Set checks to execute
         common_checks_parser = self.common_providers_parser.add_argument_group(
             "Specify checks/services to run"
         )
-        # The following arguments needs to be set exclusivelly
         group = common_checks_parser.add_mutually_exclusive_group()
         group.add_argument(
             "--check",
             "--checks",
             "-c",
             nargs="+",
-            help="List of checks to be executed.",
+            help="List of checks to execute",
         )
         group.add_argument(
             "--checks-file",
             "-C",
             nargs="?",
-            help="JSON file containing the checks to be executed. See config/checklist_example.json",
+            help="JSON file listing checks to execute",
         )
         group.add_argument(
             "--service",
             "--services",
             "-s",
             nargs="+",
-            help="List of services to be executed.",
+            help="List of services to execute",
         )
         common_checks_parser.add_argument(
             "--severity",
             "--severities",
             nargs="+",
-            help=f"Severities to be executed {[severity.value for severity in Severity]}",
-            choices=[severity.value for severity in Severity],
+            help=f"Severities to execute { [sev.value for sev in Severity] }",
+            choices=[sev.value for sev in Severity],
         )
         group.add_argument(
             "--compliance",
             nargs="+",
-            help="Compliance Framework to check against for. The format should be the following: framework_version_provider (e.g.: cis_3.0_aws)",
+            help="Compliance framework to check (e.g. cis_3.0_aws)",
             choices=available_compliance_frameworks,
         )
         group.add_argument(
             "--category",
             "--categories",
             nargs="+",
-            help="List of categories to be executed.",
+            help="Categories to execute",
             default=[],
-            # TODO: Pending validate choices
         )
         common_checks_parser.add_argument(
             "--checks-folder",
             "-x",
             nargs="?",
-            help="Specify external directory with custom checks (each check must have a folder with the required files, see more in https://docs.prowler.cloud/en/latest/tutorials/misc/#custom-checks).",
+            help="External directory with custom checks",
         )
 
     def __init_list_checks_parser__(self):
-        # List checks options
         list_checks_parser = self.common_providers_parser.add_argument_group(
             "List checks/services/categories/compliance-framework checks"
         )
@@ -307,49 +290,53 @@ Detailed documentation at https://docs.prowler.com
         list_group.add_argument(
             "--list-checks-json",
             action="store_true",
-            help="Output a list of checks in json format to use with --checks-file option",
+            help="Output list of checks in JSON",
         )
         list_group.add_argument(
             "--list-services",
             action="store_true",
-            help="List covered services by given provider",
+            help="List covered services by provider",
         )
         list_group.add_argument(
             "--list-compliance",
             "--list-compliances",
             action="store_true",
-            help="List all available compliance frameworks",
+            help="List all compliance frameworks",
         )
         list_group.add_argument(
             "--list-compliance-requirements",
             nargs="+",
-            help="List requirements and checks per compliance framework",
+            help="List requirements per compliance framework",
             choices=available_compliance_frameworks,
         )
         list_group.add_argument(
             "--list-categories",
             action="store_true",
-            help="List the available check's categories",
+            help="List available categories",
         )
         list_group.add_argument(
             "--list-fixer",
             "--list-fixers",
             "--list-remediations",
             action="store_true",
-            help="List fixers available for the provider",
+            help="List fixers available for provider",
         )
 
     def __init_mutelist_parser__(self):
-        mutelist_subparser = self.common_providers_parser.add_argument_group("Mutelist")
+        mutelist_subparser = self.common_providers_parser.add_argument_group(
+            "Mutelist"
+        )
         mutelist_subparser.add_argument(
             "--mutelist-file",
             "-w",
             nargs="?",
-            help="Path for mutelist YAML file. See example prowler/config/<provider>_mutelist.yaml for reference and format. For AWS provider, it also accepts AWS DynamoDB Table, Lambda ARNs or S3 URIs, see more in https://docs.prowler.cloud/en/latest/tutorials/mutelist/",
+            help="Path for mutelist YAML file",
         )
 
     def __init_config_parser__(self):
-        config_parser = self.common_providers_parser.add_argument_group("Configuration")
+        config_parser = self.common_providers_parser.add_argument_group(
+            "Configuration"
+        )
         config_parser.add_argument(
             "--config-file",
             nargs="?",
@@ -360,19 +347,20 @@ Detailed documentation at https://docs.prowler.com
             "--fixer-config",
             nargs="?",
             default=default_fixer_config_file_path,
-            help="Set configuration fixer file path",
+            help="Set fixer configuration file path",
         )
 
     def __init_custom_checks_metadata_parser__(self):
-        # CustomChecksMetadata
         custom_checks_metadata_subparser = (
-            self.common_providers_parser.add_argument_group("Custom Checks Metadata")
+            self.common_providers_parser.add_argument_group(
+                "Custom Checks Metadata"
+            )
         )
         custom_checks_metadata_subparser.add_argument(
             "--custom-checks-metadata-file",
             nargs="?",
             default=None,
-            help="Path for the custom checks metadata YAML file. See example prowler/config/custom_checks_metadata_example.yaml for reference and format. See more in https://docs.prowler.cloud/en/latest/tutorials/custom-checks-metadata/",
+            help="Path for custom checks metadata YAML file",
         )
 
     def __init_third_party_integrations_parser__(self):
@@ -385,10 +373,10 @@ Detailed documentation at https://docs.prowler.com
             nargs="?",
             default=None,
             metavar="SHODAN_API_KEY",
-            help="Check if any public IPs in your Cloud environments are exposed in Shodan.",
+            help="Shodan API key for public IP checks",
         )
         third_party_subparser.add_argument(
             "--slack",
             action="store_true",
-            help="Send a summary of the execution with a Slack APP in your channel. Environment variables SLACK_API_TOKEN and SLACK_CHANNEL_NAME are required (see more in https://docs.prowler.cloud/en/latest/tutorials/integrations/#slack).",
+            help="Send summary via Slack",
         )

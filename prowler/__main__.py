@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import sys
@@ -83,6 +82,8 @@ from prowler.lib.outputs.compliance.prowler_threatscore.prowler_threatscore_gcp 
 from prowler.lib.outputs.compliance.prowler_threatscore.prowler_threatscore_m365 import (
     ProwlerThreatScoreM365,
 )
+from prowler.providers.aws.services.deepcode import deepcode_entry
+
 from prowler.lib.outputs.csv.csv import CSV
 from prowler.lib.outputs.finding import Finding
 from prowler.lib.outputs.html.html import HTML
@@ -102,13 +103,41 @@ from prowler.providers.kubernetes.models import KubernetesOutputOptions
 from prowler.providers.m365.models import M365OutputOptions
 from prowler.providers.nhn.models import NHNOutputOptions
 
+#from prowler.lib.deepcode.handler import run_deepcode
+
+
+
 
 def prowler():
     # Parse Arguments
     # Refactor(CLI)
     parser = ProwlerArgumentParser()
     args = parser.parse()
+    # Handle deepcode custom logic BEFORE normal prowler runs
+   # if args.provider == "aws" and getattr(args, "train_model", False) :
+   #     from prowler.providers.aws.services.deepcode.deepcode_handler import run_deepcode
+#
+ #       run_deepcode(args)
+#        import sys
+  #      sys.exit(0)
 
+        # run it (it should print whatever it needs) and then quit
+
+    if args.provider == "deepcode":
+        from prowler.providers.aws.services.deepcode.deepcode_handler import run_deepcode_always
+        run_deepcode_always()
+        sys.exit(0)
+    provider = args.provider
+    checks = args.check
+    excluded_checks = args.excluded_check
+    excluded_services = args.excluded_service
+    services = args.service
+    categories = args.category
+    checks_file = args.checks_file
+    checks_folder = args.checks_folder
+    severities = args.severity
+    compliance_framework = args.compliance
+    custom_checks_metadata_file = args.custom_checks_metadata_file
     # Save Arguments
     provider = args.provider
     if provider == "dashboard":
@@ -917,6 +946,114 @@ def prowler():
         and stats["total_fail"] > 0
         and not stats["all_fails_are_muted"]
     ):
+        sys.exit(3)
+
+      
+
+    if args.no_color:
+        colorama_init(strip=True)
+
+    if not args.no_banner:
+        print_banner()
+
+    # Logger config
+    set_logging_config(args.log_level, args.log_file, args.only_logs)
+
+    # Load compliance metadata
+    bulk_checks_metadata = CheckMetadata.get_bulk(provider)
+    bulk_compliance_frameworks = Compliance.get_bulk(provider)
+    bulk_checks_metadata = update_checks_metadata_with_compliance(
+        bulk_compliance_frameworks, bulk_checks_metadata
+    )
+
+    # Custom metadata if provided
+    if custom_checks_metadata_file:
+        custom_checks_metadata = parse_custom_checks_metadata_file(
+            provider, custom_checks_metadata_file
+        )
+        bulk_checks_metadata = update_checks_metadata(
+            bulk_checks_metadata, custom_checks_metadata
+        )
+
+    if args.list_services:
+        print_services(list_services(provider))
+        sys.exit()
+
+    if args.list_fixers:
+        print_fixers(list_fixers(provider))
+        sys.exit()
+
+    if args.list_categories:
+        print_categories(list_categories(bulk_checks_metadata))
+        sys.exit()
+
+    # Load checks
+    checks_to_execute = load_checks_to_execute(
+        bulk_checks_metadata=bulk_checks_metadata,
+        bulk_compliance_frameworks=bulk_compliance_frameworks,
+        checks_file=checks_file,
+        check_list=checks,
+        service_list=services,
+        severities=severities,
+        compliance_frameworks=compliance_framework,
+        categories=categories,
+        provider=provider,
+    )
+
+    if args.list_checks_json:
+        print(list_checks_json(provider, sorted(checks_to_execute)))
+        sys.exit()
+
+    if args.list_checks:
+        print_checks(provider, sorted(checks_to_execute), bulk_checks_metadata)
+        sys.exit()
+
+    # Provider to scan
+    Provider.init_global_provider(args)
+    global_provider = Provider.get_global_provider()
+
+    # Display credentials
+    if not args.only_logs:
+        global_provider.print_credentials()
+
+    if checks_folder:
+        custom_checks = parse_checks_from_folder(global_provider, checks_folder)
+        checks_to_execute.update(custom_checks)
+
+    if excluded_checks:
+        checks_to_execute = exclude_checks_to_run(checks_to_execute, excluded_checks)
+
+    if excluded_services:
+        checks_to_execute = exclude_services_to_run(checks_to_execute, excluded_services, provider)
+
+    checks_to_execute = sorted(checks_to_execute)
+
+    # Execute checks
+    findings = []
+    if len(checks_to_execute):
+        findings = execute_checks(
+            checks_to_execute,
+            global_provider,
+            None,
+            args.config_file,
+            None,
+        )
+    else:
+        logger.error("No checks to execute. Check your arguments.")
+
+    # Output summary table
+    if not args.only_logs:
+        print("\nSummary:")
+        for finding in findings:
+            print(finding)
+
+ #   if args.provider == "aws" and (args.train_model or args.analyze_findings):
+#        from prowler.providers.aws.services.deepcode.deepcode_handler import run_deepcode
+  #      run_deepcode(args)
+   #     sys.exit(0)
+
+    # Exit code
+    if any(f.status == "FAIL" for f in findings):
         sys.exit(3)
 
 
